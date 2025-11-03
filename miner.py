@@ -481,7 +481,15 @@ class MinerWorker:
         return (hash_value | difficulty_value) == difficulty_value
 
     def submit_solution(self, challenge, nonce):
-        """Submit solution to API"""
+        """
+        Submit solution to API
+
+        Returns:
+            tuple: (success: bool, should_mark_solved: bool)
+                - (True, True): Solution accepted, mark as solved
+                - (False, True): Solution rejected by server (e.g., already exists), mark as solved
+                - (False, False): Network/exception error, don't mark as solved (may retry)
+        """
         # Don't URL encode - API expects raw values
         url = f"{self.api_base.rstrip('/')}/solution/{self.address}/{challenge['challenge_id']}/{nonce}"
 
@@ -494,15 +502,15 @@ class MinerWorker:
                 self.logger.info(f"Worker {self.worker_id} ({self.short_addr}): Solution ACCEPTED for challenge {challenge['challenge_id']}")
             else:
                 self.logger.warning(f"Worker {self.worker_id} ({self.short_addr}): Solution REJECTED for challenge {challenge['challenge_id']} - No receipt")
-            
-            return success
+
+            return (success, True)  # Either accepted or server said no, mark as solved
         except requests.exceptions.HTTPError as e:
             error_detail = e.response.text
             self.logger.warning(f"Worker {self.worker_id} ({self.short_addr}): Solution REJECTED for challenge {challenge['challenge_id']} - {e.response.status_code}: {error_detail}")
-            return False
+            return (False, True)  # Server rejected (400, etc.), mark as solved
         except Exception as e:
-            self.logger.warning(f"Worker {self.worker_id} ({self.short_addr}): Solution REJECTED for challenge {challenge['challenge_id']} - {e}")
-            return False
+            self.logger.warning(f"Worker {self.worker_id} ({self.short_addr}): Solution submission error for challenge {challenge['challenge_id']} - {e}")
+            return (False, False)  # Network error, don't mark as solved
 
     def mine_challenge(self, challenge, ashmaize, rom_ptr, max_time=3600):
         """Mine a challenge"""
@@ -609,15 +617,24 @@ class MinerWorker:
                 if nonce:
                     self.logger.info(f"Worker {self.worker_id} ({self.short_addr}): Found solution for challenge {challenge_id}, submitting...")
                     self.update_status(current_challenge='Submitting solution...')
-                    if self.submit_solution(challenge, nonce):
-                        # Mark as solved
+                    success, should_mark_solved = self.submit_solution(challenge, nonce)
+
+                    if success:
+                        # Solution accepted
                         self.challenge_tracker.mark_solved(challenge_id, self.address)
                         self.update_statistics()
                         self.update_status(current_challenge='Solution accepted!')
                         time.sleep(5)
+                    elif should_mark_solved:
+                        # Solution rejected by server (already exists, invalid, etc.)
+                        # Mark as solved so we don't retry
+                        self.challenge_tracker.mark_solved(challenge_id, self.address)
+                        self.update_status(current_challenge='Solution rejected - moving on')
+                        time.sleep(5)
                     else:
-                        self.update_status(current_challenge='Solution rejected')
-                        time.sleep(10)
+                        # Network error or other exception - don't mark as solved
+                        self.update_status(current_challenge='Submission error - will retry')
+                        time.sleep(30)
                 else:
                     # Failed to find solution in time, mark as attempted
                     self.challenge_tracker.mark_solved(challenge_id, self.address)
