@@ -27,6 +27,7 @@ from urllib.parse import quote
 from wasmtime import Store, Module, Instance, Func, FuncType, ValType
 from pycardano import PaymentSigningKey, PaymentVerificationKey, Address, Network
 import cbor2
+import random
 
 
 # Configure logging
@@ -467,9 +468,9 @@ class MinerWorker:
                 night_allocation=local.get('night_allocation', 0)/1000000.0
             )
 
-    def build_preimage(self, nonce, challenge):
+    def build_preimage_static_part(self, challenge):
         return (
-            nonce + self.address + challenge["challenge_id"] +
+            self.address + challenge["challenge_id"] +
             challenge["difficulty"] + challenge["no_pre_mine"] +
             challenge["latest_submission"] + challenge["no_pre_mine_hour"]
         )
@@ -481,10 +482,8 @@ class MinerWorker:
 
     def submit_solution(self, challenge, nonce):
         """Submit solution to API"""
-        addr_encoded = quote(self.address, safe='')
-        challenge_encoded = quote(challenge['challenge_id'], safe='*')
-        nonce_encoded = quote(nonce, safe='')
-        url = f"{self.api_base.rstrip('/')}/solution/{addr_encoded}/{challenge_encoded}/{nonce_encoded}"
+        # Don't URL encode - API expects raw values
+        url = f"{self.api_base.rstrip('/')}/solution/{self.address}/{challenge['challenge_id']}/{nonce}"
 
         try:
             response = requests.post(url, json={})
@@ -495,7 +494,12 @@ class MinerWorker:
                 self.logger.info(f"Worker {self.worker_id} ({self.short_addr}): Solution ACCEPTED for challenge {challenge['challenge_id']}")
             else:
                 self.logger.warning(f"Worker {self.worker_id} ({self.short_addr}): Solution REJECTED for challenge {challenge['challenge_id']} - No receipt")
+            
             return success
+        except requests.exceptions.HTTPError as e:
+            error_detail = e.response.text
+            self.logger.warning(f"Worker {self.worker_id} ({self.short_addr}): Solution REJECTED for challenge {challenge['challenge_id']} - {e.response.status_code}: {error_detail}")
+            return False
         except Exception as e:
             self.logger.warning(f"Worker {self.worker_id} ({self.short_addr}): Solution REJECTED for challenge {challenge['challenge_id']} - {e}")
             return False
@@ -507,9 +511,11 @@ class MinerWorker:
 
         self.update_status(current_challenge=challenge['challenge_id'], attempts=0)
 
+        preimage_static = self.build_preimage_static_part(challenge)
+
         while time.time() - start_time < max_time:
-            nonce = secrets.token_hex(8)
-            preimage = self.build_preimage(nonce, challenge)
+            nonce = random.randbytes(8).hex()
+            preimage = nonce + preimage_static
             hash_hex = ashmaize.hash_with_rom(rom_ptr, preimage)
             attempts += 1
 
@@ -546,10 +552,15 @@ class MinerWorker:
         self.update_status(current_challenge='Loading WASM...')
         ashmaize = AshmaizeWASM()
         rom_cache = {}  # Cache ROMs by no_pre_mine key
-        last_stats_update = 0
+        last_stats_update = 0  # Set to 0 to trigger immediate stats update on first loop
 
         while True:
             try:
+                # Update statistics every 10 minutes
+                if time.time() - last_stats_update > 600:
+                    self.update_statistics()
+                    last_stats_update = time.time()
+
                 # Get current challenge from API and register it
                 api_challenge = self.get_current_challenge()
                 if api_challenge:
@@ -587,11 +598,6 @@ class MinerWorker:
                     rom_cache[no_pre_mine] = ashmaize.build_rom(no_pre_mine)
 
                 rom_ptr = rom_cache[no_pre_mine]
-
-                # Update statistics every 10 minutes
-                if time.time() - last_stats_update > 600:
-                    self.update_statistics()
-                    last_stats_update = time.time()
 
                 # Log start of mining
                 self.logger.info(f"Worker {self.worker_id} ({self.short_addr}): Starting work on challenge {challenge_id} (time left: {time_left/3600:.1f}h)")
