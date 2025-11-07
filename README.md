@@ -2,7 +2,7 @@
 
 A Python-based mining bot for the Midnight Network's scavenger hunt, allowing users to automatically mine for NIGHT tokens with multiple wallets.
 
-Works on Windows and Linux. Only partial support for MacOS with apple silicone (see below).
+Works on Windows and Linux. Should work on Mac, although not properly tested yet (see instructions below).
 
 If you are unfamiliar with python, check out the [Easy Guide](EasyGuide.md).
 
@@ -42,7 +42,7 @@ git clone https://github.com/djeanql/MidnightMiner && cd MidnightMiner
 
 ### Mac OS
 
-If you are on MacOS, you need to delete `ashmaize_py.so`, and rename `ashmaize_py_mac.so` to `ashmaize_py.so`.
+If you are on MacOS, you need to delete `ashmaize_py.so`, and rename `ashmaize_py_mac.so` (for apple silicon) or `ashmaize_py_mac_intel.so` (for Intel) to `ashmaize_py.so`.
 
 ## Usage
 
