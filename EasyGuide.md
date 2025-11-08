@@ -67,7 +67,7 @@ This software will be updated very frequently, so it is important you update it 
 git pull
 ```
 
-This will fetch any changes made in this repository
+This will fetch any changes made in this repository. If you have edited files locally, you will need to delete them first, or move the file out of the miner folder.
 
 ## Back Up Your Wallet File
 
