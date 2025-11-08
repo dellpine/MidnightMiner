@@ -4,7 +4,7 @@ A Python-based mining bot for the Midnight Network's scavenger hunt, allowing us
 
 **Supported Platforms:** Windows (x64), Linux (x64, ARM64), macOS (Intel, Apple Silicon)
 
-If you are unfamiliar with python, check out the [Easy Guide](EasyGuide.md).
+If you are unfamiliar with python, and/or using windows, check out the [Easy Guide](EasyGuide.md).
 
 ## Disclaimer
 
@@ -26,7 +26,7 @@ The miner operates by performing the following steps:
 
 Before running the miner, ensure you have the following:
 
-1.  **Python 3**: The script is written in Python (version 3.8 or higher recommended).
+1.  **Python 3**: The script is written in Python (version 3.13 or higher required).
 2.  **Required Libraries**: Install the necessary Python packages using pip:
     ```bash
     pip install requests pycardano cbor2 portalocker
