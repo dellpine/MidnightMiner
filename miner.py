@@ -441,7 +441,7 @@ class WalletManager:
 class MinerWorker:
     """Individual mining worker for one wallet """
 
-    def __init__(self, wallet_data, worker_id, status_dict, challenge_tracker, dev_address, donation_enabled=True, api_base="https://scavenger.prod.gd.midnighttge.io/"):
+    def __init__(self, wallet_data, worker_id, status_dict, challenge_tracker, dev_address, failed_solutions_count, failed_solutions_lock, donation_enabled=True, api_base="https://scavenger.prod.gd.midnighttge.io/"):
         self.wallet_data = wallet_data
         self.worker_id = worker_id
         self.address = wallet_data['address']
@@ -451,6 +451,8 @@ class MinerWorker:
         self.status_dict = status_dict
         self.challenge_tracker = challenge_tracker
         self.dev_address = dev_address
+        self.failed_solutions_count = failed_solutions_count
+        self.failed_solutions_lock = failed_solutions_lock
         self.donation_enabled = donation_enabled
         self.logger = logging.getLogger('midnight_miner')
 
@@ -542,7 +544,10 @@ class MinerWorker:
             # Save to CSV since this is a definitive rejection (not a network error)
             if not already_exists:
                 # Append solution to solutions.csv
-                if not append_solution_to_csv(address, challenge['challenge_id'], nonce):
+                if append_solution_to_csv(address, challenge['challenge_id'], nonce):
+                    with self.failed_solutions_lock:
+                        self.failed_solutions_count.value += 1
+                else:
                     self.logger.error(f"Worker {self.worker_id} ({self.short_addr}): Failed to write solution to file")
 
             return (False, True, already_exists)
@@ -760,7 +765,10 @@ class MinerWorker:
                             # Max retries (2) reached, save to CSV and move on
                             self.logger.warning(f"Worker {self.worker_id} ({self.short_addr}): Max retries (2) reached for challenge {challenge_id}, saving to solutions.csv and moving on")
                             submission_address = mining_address if mining_address else self.address
-                            if not append_solution_to_csv(submission_address, challenge_id, nonce):
+                            if append_solution_to_csv(submission_address, challenge_id, nonce):
+                                with self.failed_solutions_lock:
+                                    self.failed_solutions_count.value += 1
+                            else:
                                 self.logger.error(f"Worker {self.worker_id} ({self.short_addr}): Failed to save solution to CSV")
 
                             self.challenge_tracker.mark_solved(challenge_id, self.address)
@@ -772,7 +780,7 @@ class MinerWorker:
                         else:
                             # Retry again (will retry on next loop iteration)
                             self.logger.info(f"Worker {self.worker_id} ({self.short_addr}): Submission failed, will retry (attempt {self.submission_retry_count + 1}/3)")
-                            self.update_status(current_challenge=f'Submission error - will retry')
+                            self.update_status(current_challenge=f'Submission error, retrying...')
                             time.sleep(15)
 
                     if mining_for_developer:
@@ -799,12 +807,12 @@ class MinerWorker:
                 time.sleep(60)
 
 
-def worker_process(wallet_data, worker_id, status_dict, challenges_file, dev_address, donation_enabled=True):
+def worker_process(wallet_data, worker_id, status_dict, challenges_file, dev_address, failed_solutions_count, failed_solutions_lock, donation_enabled=True):
     """Process entry point for worker"""
     try:
         setup_logging()
         challenge_tracker = ChallengeTracker(challenges_file)
-        worker = MinerWorker(wallet_data, worker_id, status_dict, challenge_tracker, dev_address, donation_enabled=donation_enabled)
+        worker = MinerWorker(wallet_data, worker_id, status_dict, challenge_tracker, dev_address, failed_solutions_count, failed_solutions_lock, donation_enabled=donation_enabled)
         worker.run()
     except Exception as e:
         logger = logging.getLogger('midnight_miner')
@@ -1027,6 +1035,8 @@ def main():
 
     manager = Manager()
     status_dict = manager.dict()
+    failed_solutions_count = manager.Value('i', 0)
+    failed_solutions_lock = manager.Lock()
 
     # NIGHT balance tracking with daily updates
     night_balance_dict = manager.dict()
@@ -1071,7 +1081,7 @@ def main():
             # Assign dev address statically based on worker_id
             dev_address = dev_addresses[worker_id % len(dev_addresses)]
 
-            p = Process(target=worker_process, args=(wallet, worker_id, status_dict, challenges_file, dev_address, donation_enabled))
+            p = Process(target=worker_process, args=(wallet, worker_id, status_dict, challenges_file, dev_address, failed_solutions_count, failed_solutions_lock, donation_enabled))
             p.start()
             workers[worker_id] = (p, wallet)
             logger.info(f"Started worker {worker_id} with wallet {wallet['address'][:20]}...")
@@ -1140,6 +1150,11 @@ def main():
 
     print(f"\nSession Statistics:")
     print(f"  New challenges solved: {session_total_completed}")
+
+    if failed_solutions_count.value > 0:
+        print()
+        print(f"[WARNING] Found {failed_solutions_count.value} solution(s) that failed to submit.")
+        print("Run 'python resubmit_solutions.py' to try submitting them again.\n")
 
     logger.info(f"Session statistics: {session_total_completed} new challenges solved")
     logger.info("Midnight Miner shutdown complete")
