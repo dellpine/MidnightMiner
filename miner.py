@@ -226,7 +226,7 @@ class ChallengeTracker:
                 if wallet_address not in data['solved_by']:
                     deadline = datetime.fromisoformat(data['latest_submission'].replace('Z', '+00:00'))
                     time_left = (deadline - now).total_seconds()
-                    if time_left > 0:
+                    if time_left > 120:  # Require at least 2 minutes remaining
                         candidates.append({
                             'challenge': data,
                             'time_left': time_left
@@ -689,7 +689,8 @@ class MinerWorker:
 
                 # Mine the challenge (or reuse nonce if retrying)
                 if self.current_nonce is None:
-                    max_mine_time = min(time_left * 0.8, 3600)
+                    # Use 99% of remaining time, reserving 1% for submission overhead
+                    max_mine_time = time_left * 0.99
                     nonce = self.mine_challenge_native(challenge, rom, max_time=max_mine_time, mining_address=mining_address)
                     if nonce:
                         # Store both nonce and challenge data for retry
@@ -777,9 +778,9 @@ class MinerWorker:
                     if mining_for_developer:
                         self.update_status(address=self.address)
                 else:
-                    self.challenge_tracker.mark_solved(challenge_id, self.address)
-                    self.logger.info(f"Worker {self.worker_id} ({self.short_addr}): No solution found for challenge {challenge_id} within time limit")
-                    self.update_status(current_challenge='No solution found')
+                    # No solution found - DON'T mark as solved (that inflates completion count)
+                    self.logger.info(f"Worker {self.worker_id} ({self.short_addr}): No solution found for challenge {challenge_id} in mining session")
+                    self.update_status(current_challenge='No solution, checking next...')
                     self.current_nonce = None
                     self.current_challenge_data = None
                     self.submission_retry_count = 0
