@@ -1,8 +1,19 @@
-# Local runtime artifacts
-wallets.json
-miner.log
+*.log
+__pycache__/
 solutions.csv
-proxy.json
-challenges.json
-devaddress.json
+wallets.json
+balances.json
+midnight-miner.service
+midnight-miner.env
+venv/
+.venv/
 
+pyvenv.cfg
+
+challenges.json
+developer_addresses.json
+
+bin/
+lib/
+lib64/
+lib64

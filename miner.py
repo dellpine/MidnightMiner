@@ -123,6 +123,97 @@ def unlock_file(file_handle):
         fcntl.flock(file_handle.fileno(), fcntl.LOCK_UN)
 
 
+
+def load_latest_balance_snapshot(balances_file="balances.json"):
+    """Load the most recent balance snapshot from balances.json. Returns (balance, timestamp) or (None, None) if not found."""
+    try:
+        if not os.path.exists(balances_file):
+            return (None, None)
+
+        with open(balances_file, 'r') as f:
+            balances_data = json.load(f)
+
+        if not balances_data or 'snapshots' not in balances_data:
+            return (None, None)
+
+        snapshots = balances_data['snapshots']
+        if not snapshots:
+            return (None, None)
+
+        # Get the most recent snapshot (last in list if sorted chronologically)
+        # Sort by timestamp to ensure we get the latest
+        sorted_snapshots = sorted(snapshots, key=lambda x: x.get('timestamp', ''))
+        latest = sorted_snapshots[-1]
+
+        balance = latest.get('balance')
+        timestamp = latest.get('timestamp')
+
+        return (balance, timestamp) if balance is not None else (None, None)
+    except Exception as e:
+        logging.warning(f"Failed to load balance snapshot: {e}")
+        return (None, None)
+
+
+def save_balance_snapshot(balance, balances_file="balances.json"):
+    """Save a balance snapshot with timestamp to balances.json"""
+    try:
+        # Create file if it doesn't exist
+        if not os.path.exists(balances_file):
+            with open(balances_file, 'w') as f:
+                json.dump({"snapshots": []}, f)
+
+        # Append with locking
+        with open(balances_file, 'r+') as f:
+            lock_file(f)
+            try:
+                f.seek(0)
+                content = f.read()
+                balances_data = json.loads(content) if content else {"snapshots": []}
+
+                # Ensure snapshots list exists
+                if 'snapshots' not in balances_data:
+                    balances_data['snapshots'] = []
+
+                # Add new snapshot
+                snapshot = {
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'balance': balance
+                }
+                balances_data['snapshots'].append(snapshot)
+
+                # Keep only last 10000 snapshots to prevent file from growing too large
+                if len(balances_data['snapshots']) > 10000:
+                    balances_data['snapshots'] = balances_data['snapshots'][-10000:]
+
+                f.seek(0)
+                f.truncate()
+                json.dump(balances_data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+
+                return True
+            finally:
+                unlock_file(f)
+        return True
+    except Exception as e:
+        logging.warning(f"Failed to save balance snapshot: {e}")
+        return False
+
+def backup_wallets_file(wallet_file):
+    """Backup wallets.json to wallets.json.bak before making changes"""
+    if os.path.exists(wallet_file):
+        backup_file = wallet_file + ".bak"
+        try:
+            import shutil
+            shutil.copy2(wallet_file, backup_file)
+            return True
+        except Exception as e:
+            logging.warning(f"Failed to create backup of {wallet_file}: {e}")
+            return False
+    return False
+
+
+
 def append_solution_to_csv(address, challenge_id, nonce):
     """Append solution to solutions.csv with proper file locking"""
     try:
@@ -467,6 +558,7 @@ class WalletManager:
         # Only save wallets if all registrations succeeded
         with open(self.wallet_file, 'w') as f:
             json.dump(self.wallets, f, indent=2)
+        backup_wallets_file(self.wallet_file)
 
         print(f"✓ Total wallets: {len(self.wallets)}")
         return self.wallets
@@ -476,6 +568,7 @@ class WalletManager:
         with self._lock:
             with open(self.wallet_file, 'w') as f:
                 json.dump(self.wallets, f, indent=2)
+            backup_wallets_file(self.wallet_file)
 
     def add_wallet(self, wallet_data):
         """Add a new wallet to the manager"""
@@ -519,6 +612,7 @@ class WalletManager:
             self.wallets.append(wallet)
             with open(self.wallet_file, 'w') as f:
                 json.dump(self.wallets, f, indent=2)
+            backup_wallets_file(self.wallet_file)
 
         return wallet
 
@@ -567,7 +661,7 @@ class MinerWorker:
         if self.random_buffer_pos >= len(self.random_buffer):
             self.random_buffer = bytearray(secrets.token_bytes(8192))
             self.random_buffer_pos = 0
-        
+
         nonce_bytes = self.random_buffer[self.random_buffer_pos:self.random_buffer_pos + 8]
         self.random_buffer_pos += 8
         return nonce_bytes.hex()
@@ -750,7 +844,6 @@ class MinerWorker:
                 time_left = (deadline - datetime.now(timezone.utc)).total_seconds()
 
                 if time_left <= 0:
-                    self.challenge_tracker.mark_solved(challenge_id, self.address)
                     self.logger.info(f"Worker {self.worker_id} ({self.short_addr}): Challenge {challenge_id} expired")
                     self.update_status(current_challenge='Expired')
                     time.sleep(5)
@@ -944,8 +1037,16 @@ def display_dashboard(status_dict, num_workers, wallet_manager, challenge_tracke
             # Update if: different date AND current time is after 2am UTC AND we haven't updated today
             if now_utc.hour >= 2 and last_update_str != current_date:
                 new_balance = fetch_total_night_balance(wallet_manager, api_base)
-                night_balance_dict['balance'] = new_balance
-                night_balance_dict['last_update_date'] = current_date
+                if new_balance is not None:
+                    night_balance_dict['balance'] = new_balance
+                    night_balance_dict['last_update_date'] = current_date
+                    # Save balance snapshot for tracking over time
+                    save_balance_snapshot(new_balance)
+            # If no balance is set yet, try loading from snapshot
+            elif 'balance' not in night_balance_dict or night_balance_dict.get('balance') is None:
+                snapshot_balance, _ = load_latest_balance_snapshot()
+                if snapshot_balance is not None:
+                    night_balance_dict['balance'] = snapshot_balance
 
             os.system('clear' if os.name == 'posix' else 'cls')
 
@@ -1003,7 +1104,11 @@ def display_dashboard(status_dict, num_workers, wallet_manager, challenge_tracke
             print()
             print(color_text(f"{'Total Hash Rate:':<20} {total_hashrate:.0f} H/s", CYAN))
             print(color_text(f"{'Total Completed:':<20} {completed_str}", CYAN))
-            print(color_text(f"{'Total NIGHT*:':<20} {night_balance_dict['balance']:.2f}", GREEN))
+            balance_display = night_balance_dict.get('balance')
+            if balance_display is not None:
+                print(color_text(f"{'Total NIGHT*:':<20} {balance_display:.2f}", GREEN))
+            else:
+                print(color_text(f"{'Total NIGHT*:':<20} Loading...", GREEN))
             print("="*110)
             print("*Night balance updates every 24h")
             print("\nPress Ctrl+C to stop all miners")
@@ -1026,7 +1131,7 @@ def get_wallet_statistics(wallet_address, api_base):
 
 
 def fetch_total_night_balance(wallet_manager, api_base):
-    """Fetch total NIGHT balance across all wallets once at startup"""
+    """Fetch total NIGHT balance across all wallets once at startup. Returns balance or None if fetch failed."""
     total_night = 0.0
     failed = False
 
@@ -1036,13 +1141,13 @@ def fetch_total_night_balance(wallet_manager, api_base):
             local = stats.get('local', {})
             night = local.get('night_allocation', 0) / 1000000.0
             total_night += night
-
         else:
             failed = True
             break
 
     if failed:
         logging.warning("Some wallet statistics could not be fetched.")
+        return None  # Return None to indicate failure
 
     return total_night
 
@@ -1064,6 +1169,7 @@ def main():
     wallets_file = "wallets.json"
     challenges_file = "challenges.json"
     donation_enabled = True
+    wallets_count = None
 
     for i, arg in enumerate(sys.argv):
         if arg == '--workers' and i + 1 < len(sys.argv):
@@ -1074,19 +1180,29 @@ def main():
             challenges_file = sys.argv[i + 1]
         elif arg == '--no-donation':
             donation_enabled = False
+        elif arg == '--wallets' and i + 1 < len(sys.argv):
+            wallets_count = int(sys.argv[i + 1])
 
     if num_workers < 1:
         print("Error: --workers must be at least 1")
         return 1
 
+    # If --wallets not specified, default to num_workers
+    if wallets_count is None:
+        wallets_count = num_workers
+    elif wallets_count < 1:
+        print("Error: --wallets must be at least 1")
+        return 1
+
     print(f"Configuration:")
     print(f"  Workers: {num_workers}")
+    print(f"  Wallets to ensure: {wallets_count}")
     print(f"  Wallets file: {wallets_file}")
     print(f"  Challenges file: {challenges_file}")
     print(f"  Developer donations: {'Enabled (5%)' if donation_enabled else 'Disabled'}")
     print()
 
-    logger.info(f"Configuration: workers={num_workers}")
+    logger.info(f"Configuration: workers={num_workers}, wallets_to_ensure={wallets_count}")
 
     # Load or fetch developer addresses
     dev_addresses = load_developer_addresses()
@@ -1116,16 +1232,38 @@ def main():
     wallet_manager = WalletManager(wallets_file)
     api_base = "https://scavenger.prod.gd.midnighttge.io/"
 
-    # Load existing wallets or create enough for all workers
-    wallets = wallet_manager.load_or_create_wallets(num_workers, api_base, donation_enabled)
+    # Load existing wallets or create enough for specified wallet count
+    wallets = wallet_manager.load_or_create_wallets(wallets_count, api_base, donation_enabled)
     logger.info(f"Loaded/created {len(wallets)} wallet(s)")
 
     # Fetch initial statistics
     print("\nFetching initial statistics...")
     challenge_tracker = ChallengeTracker(challenges_file)
-    initial_night = fetch_total_night_balance(wallet_manager, api_base)
+
+    # Try to load balance from snapshot first (for fast startup)
+    snapshot_balance, snapshot_timestamp = load_latest_balance_snapshot()
+
+    # Try to fetch fresh balance
+    fresh_balance = fetch_total_night_balance(wallet_manager, api_base)
+
+    if fresh_balance is not None:
+        # Fresh balance fetched successfully (even if 0.0)
+        initial_night = fresh_balance
+        print(f"✓ Initial NIGHT balance: {initial_night:.2f}")
+        # Save balance snapshot if it's different from snapshot (or if no snapshot exists)
+        if snapshot_balance is None or abs(fresh_balance - snapshot_balance) > 0.01:
+            save_balance_snapshot(fresh_balance)
+    elif snapshot_balance is not None:
+        # Use snapshot as fallback
+        initial_night = snapshot_balance
+        print(f"✓ Loaded NIGHT balance from snapshot: {initial_night:.2f} (from {snapshot_timestamp})")
+        print("  (Failed to fetch fresh balance, using cached snapshot)")
+    else:
+        # No balance available
+        initial_night = 0.0
+        print("⚠ Could not load NIGHT balance (no snapshot and fetch failed)")
+
     initial_completed = wallet_manager.count_total_challenges(challenge_tracker)
-    print(f"✓ Initial NIGHT balance: {initial_night:.2f}")
     print(f"✓ Initial challenges completed: {initial_completed}")
 
     print()
