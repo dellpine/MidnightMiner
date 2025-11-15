@@ -56,7 +56,7 @@ git clone https://github.com/djeanql/MidnightMiner && cd MidnightMiner
 
 2. **Activate the virtual environment**:
 
-   ⚠️ All future steps will assume you are in the virtual environment.
+   All future steps will assume you are in the virtual environment. It is optional, but highly recommended.
 
    - On Linux/macOS:
      ```bash
