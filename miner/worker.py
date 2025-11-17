@@ -281,8 +281,7 @@ class MinerWorker:
 
                 # Mine the challenge (or reuse nonce if retrying)
                 if self.current_nonce is None:
-                    # Use 99% of remaining time, reserving 1% for submission overhead
-                    max_mine_time = time_left * 0.99
+                    max_mine_time = time_left
                     nonce = self.mine_challenge_native(challenge, rom, max_time=max_mine_time, mining_address=mining_address)
                     if nonce:
                         # Store both nonce and challenge data for retry
