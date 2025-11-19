@@ -9,11 +9,16 @@ With the Midnight scavenger hunt now closed, I want to thank everyone who report
 
 [Defensio](https://defensio.io/), a DEX building on Midnight, is using a scavenger hunt to distribute their token. The API is compatible with the Midnight scavenger hunt API, so you can use this miner for it.
 
-**To mine DFO:** Run `python miner.py --defensio ....`
+**To mine DFO:** Run `python miner.py --defensio`
 
 **Important:** You MUST use a fresh directory for Defensio mining. If you previously mined for Midnight, either re-download this repository to a new location or delete your existing `challenges.json`, `developer-addresses.json` and `wallets.json` files.
 
 Additionally, you must consolidate to a DIFFERENT address to where you consolidated your NIGHT.
+
+**Using utility scripts with Defensio:** All utility scripts must also use the `--defensio` flag:
+- Check earnings: `python check_earnings.py --defensio`
+- Consolidate wallets: `python consolidate.py --defensio`
+- Resubmit solutions: `python resubmit_solutions.py --defensio`
 
 **Disclaimer:** MidnightMiner is NOT AFFILIATED with the Defensio project. Engage at your own risk. The tokens may be worth nothing.
 
