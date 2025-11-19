@@ -31,10 +31,6 @@ def main():
     """Main entry point with continuous worker spawning"""
     logger = setup_logging()
 
-    display_consolidation_warning()
-    time.sleep(3)
-    print()
-
     print("="*70)
     print(f"MIDNIGHT MINER - v{VERSION}")
     print("="*70)
